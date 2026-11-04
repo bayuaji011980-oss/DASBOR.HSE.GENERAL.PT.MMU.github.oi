@@ -395,7 +395,7 @@ async function models(key){if(MODELS)return MODELS;var list=[],r=null;
   try{var j=await r.json();list=(j.models||[]).filter(function(m){return /generateContent/.test((m.supportedGenerationMethods||[]).join())&&/flash/.test(m.name)&&!/image|tts|audio|live|preview|exp/.test(m.name)}).map(function(m){return m.name.replace('models/','')}).sort().reverse()}catch(e){window.hseGemInfo='Jawaban daftar model tidak terbaca (kode '+r.status+').';return MODEL_CADANGAN}
   if(!list.length)throw {code:'upstream_error',detail:'Akun Gemini ini belum punya model yang bisa dipakai.'};MODELS=list;return list}
 window.hseTesGemini=async function(){window.hseGemInfo='';MODELS=null;LEWAT_SKRIP=false;ls.del('hse_gem_skrip');
-  try{var a=await gem('Balas JSON {"ok":true}',[]);return 'Berhasil. Gemini tersambung'+(LEWAT_SKRIP||!ls.get('hse_gemini')?' lewat Apps Script':'')+' dan bisa membaca.'}catch(e){return 'Gagal: '+((e&&e.detail)||(e&&e.code)||'tidak diketahui')+(window.hseGemInfo?' '+window.hseGemInfo:'')}};
+  try{var a=await gem('Balas JSON {"ok":true}',[]);var cv=document.createElement('canvas');cv.width=cv.height=400;var cx=cv.getContext('2d');cx.fillStyle='#fff';cx.fillRect(0,0,400,400);cx.fillStyle='#000';cx.font='40px Arial';cx.fillText('TES 2026',60,200);var bl=await new Promise(function(k){cv.toBlob(k,'image/jpeg',.8)});await gem('Baca tulisan pada gambar. Balas JSON {"tulisan":""}',[bl]);return 'Berhasil, teks dan gambar. Gemini tersambung'+(LEWAT_SKRIP||!ls.get('hse_gemini')?' lewat Apps Script':'')+' dan bisa membaca.'}catch(e){return 'Gagal: '+((e&&e.detail)||(e&&e.code)||'tidak diketahui')+(window.hseGemInfo?' '+window.hseGemInfo:'')}};
 // satu per satu dengan jeda, supaya tidak kena batas kuota saat banyak file diupload sekaligus
 function gem(prompt,images){var jalan=antrian.then(async function(){var jeda=4500-(Date.now()-terakhir);if(jeda>0)await tunggu(jeda);try{return await gemUlang(prompt,images)}finally{terakhir=Date.now()}});antrian=jalan.catch(function(){});return jalan}
 async function gemUlang(prompt,images){
@@ -412,7 +412,9 @@ async function gemUlang(prompt,images){
       if(r.status===429||r.status===503||r.status===500){last=r.status;continue}
       if(!r.ok){var em='';try{em=((await r.json()).error||{}).message||''}catch(x){}throw {code:'upstream_error',detail:/api key|api_key/i.test(em)?'Kunci Gemini ditolak. Buat kunci baru lalu simpan di Pengaturan Admin.':'Gemini menolak permintaan (kode '+r.status+')'+(em?': '+em.slice(0,160):'')+'.'}}
       var j=await r.json();var t=((((j.candidates||[])[0]||{}).content||{}).parts||[]).map(function(p){return p.text||''}).join('');
-      try{return JSON.parse(t)}catch(e){var q=t.match(/[\[{][\s\S]*[\]}]/);if(q){try{return JSON.parse(q[0])}catch(e2){}}last='jawaban';continue}
+      var hasil=null;try{hasil=JSON.parse(t)}catch(e){var q=t.match(/[\[{][\s\S]*[\]}]/);if(q){try{hasil=JSON.parse(q[0])}catch(e2){}}}if(hasil==null){last='jawaban';continue}
+      // jawaban satu objek kadang dibungkus array
+      if(Array.isArray(hasil)&&hasil.length===1&&!/JSON array/.test(prompt))hasil=hasil[0];return hasil;
     }
   }
   if(last===429)throw {code:'rate_limited'};
@@ -884,8 +886,16 @@ function isFail(r){return r.hasil===false}
 function openIns(r){return (isFail(r)||r.temuan)&&r.status!=='closed'}
 function isInjury_(r){return !/near\s*miss/i.test(r.kategori||'')}
 function laterInc(cur,upto,loc){setRows('insiden').forEach(function(r){if(isInjury_(r)&&r.date<=upto&&(loc==='all'||r.loc===loc)&&(!cur||r.date>cur))cur=r.date});return cur}
+function fatalTerakhir(upto,loc){var f=null;setRows('insiden').forEach(function(r){if(r.kategori==='Fatality'&&r.date<=upto&&(!loc||loc==='all'||r.loc===loc)&&(!f||r.date>f))f=r.date});return f}
 function hasDailyInc(rows,upto){return rows.some(function(r){return r.date<=upto&&r.inc+r.unk>0})}
 function mhData(rows){var d=rows.filter(function(r){return r.hours!=null}),mon={};d.forEach(function(r){var k=r.date.slice(0,7);(mon[k]=mon[k]||{})[r.date]=(mon[k][r.date]||0)+(r.hours||0)});var ks=Object.keys(mon).sort();return {ks:ks,mon:mon,total:function(k){return Object.keys(mon[k]).reduce(function(a,x){return a+mon[k][x]},0)},hari:function(k){var y=+k.slice(0,4),m=+k.slice(5),n=new Date(Date.UTC(y,m,0)).getUTCDate(),o=[];for(var i=1;i<=n;i++){var ds=k+'-'+('0'+i).slice(-2);o.push([ds,mon[k][ds]||0])}return o}}}
+function rekapHari(rows){
+  var d=rows.filter(function(r){return r.date}),by={};d.forEach(function(r){var o=by[r.date]=by[r.date]||{mp:0,h:0};o.mp+=r.mp||0;o.h+=r.hours||0});var tg=Object.keys(by).sort();if(!tg.length)return null;
+  var a=tg[0],z=tg[tg.length-1],bln={},hilang=[],libur=[],tot=diffDays(a,z)+1;
+  for(var i=0;i<tot;i++){var t=addDays(a,i),k=t.slice(0,7),o=bln[k]=bln[k]||{k:k,kal:0,kerja:0,nol:0,hilang:0,h:0},x=by[t];o.kal++;if(!x){o.hilang++;hilang.push(t)}else{o.h+=x.h;if(x.mp>0)o.kerja++;else{o.nol++;libur.push(t)}}}
+  var bl=Object.keys(bln).sort().map(function(k){return bln[k]}),rentang=function(l){var out=[],m=null,e=null;l.forEach(function(t){if(e&&diffDays(e,t)===1)e=t;else{if(m)out.push([m,e]);m=t;e=t}});if(m)out.push([m,e]);return out};
+  return {a:a,z:z,tot:tot,lap:tg.length,kerja:tg.filter(function(t){return by[t].mp>0}).length,nol:libur.length,hilang:hilang.length,h:tg.reduce(function(p,t){return p+by[t].h},0),bl:bl,rg:rentang(hilang),rgN:rentang(libur)};
+}
 function renderMh(id,rows){
   var host=clear($(id)),m=mhData(rows);if(!m.ks.length)return;
   if(m.ks.indexOf(state.mhM)<0)state.mhM=m.ks[m.ks.length-1];
@@ -893,6 +903,8 @@ function renderMh(id,rows){
   m.ks.forEach(function(k){sel.appendChild(h('option',{value:k,text:monthLabel(k)}))});sel.value=state.mhM;sel.addEventListener('change',function(){state.mhM=sel.value;render()});
   var hr=m.hari(state.mhM),gt=m.ks.reduce(function(x,k){return x+m.total(k)},0);
   g.appendChild(panel('Manhours per bulan','Total '+fmtN(gt)+' jam dari Daily Report.',[a]));g.appendChild(panel('Manhours per hari',monthLabel(state.mhM)+', total '+fmtN(m.total(state.mhM))+' jam.',[sel,b]));host.appendChild(g);
+  var rk=rekapHari(rows);if(rk){var tb=h('div',{cls:'tbl-scroll'}),fr=function(l){return l.map(function(x){return x[0]===x[1]?fmtD(x[0]):fmtD(x[0])+' s.d. '+fmtD(x[1])}).join(', ')||'Tidak ada'};simpleTable(tb,['Bulan','Hari kalender','Hari kerja','Ada laporan, tanpa aktivitas','Tidak ada laporan','Manhours'],rk.bl.concat([{k:'',kal:rk.tot,kerja:rk.kerja,nol:rk.nol,hilang:rk.hilang,h:rk.h}]),function(x){return h('tr',{},[h('td',{},[x.k?monthLabel(x.k):h('b',{text:'Total'})]),h('td',{cls:'n',text:fmtN(x.kal)}),h('td',{cls:'n',text:fmtN(x.kerja)}),h('td',{cls:'n',text:fmtN(x.nol)}),h('td',{cls:'n',text:fmtN(x.hilang)}),h('td',{cls:'n',text:fmtN(x.h)})])},'');
+    host.appendChild(panel('Rekap hari dan manhours',fmtD(rk.a)+' s.d. '+fmtD(rk.z)+': '+fmtN(rk.tot)+' hari kalender, '+fmtN(rk.kerja)+' hari kerja, '+fmtN(rk.nol)+' hari tanpa aktivitas, '+fmtN(rk.hilang)+' hari tidak ada laporan, total '+fmtN(rk.h)+' manhours.',[tb,h('p',{cls:'sub',style:'margin-top:10px',text:'Tanggal tidak ada laporan: '+fr(rk.rg)}),h('p',{cls:'sub',text:'Tanggal ada laporan, manpower 0: '+fr(rk.rgN)})]))}
   bars(a,{labels:m.ks.map(function(k){return monthLabel(k).replace(/^(\S{3})\S*/,'$1')}),titles:m.ks.map(monthLabel),colors:[css('--s-ua')],values:m.ks.map(function(k){return [m.total(k)]}),aria:'Manhours per bulan',tips:function(i){return ['Manhours: '+fmtN(m.total(m.ks[i]))+' jam']}});
   bars(b,{labels:hr.map(function(x){return String(+x[0].slice(8))}),titles:hr.map(function(x){return fmtD(x[0])}),colors:[css('--s-ppe')],values:hr.map(function(x){return [x[1]]}),aria:'Manhours per hari',tips:function(i){return ['Manhours: '+fmtN(hr[i][1])+' jam']}});
 }
@@ -919,10 +931,11 @@ function renderRingkasan(){
   renderMh('mhR',allRows());renderGaleri();
   var rows=dailyRows(),m=metrics(rows);renderProHero(metrics(allRows()));var ins=pRows('inspeksi'),apd=pRows('apd'),ab=absMetrics(pRows('absensi')),mp=setRows('manpower');
   var all=allRows().slice().sort(byDate);var last=rows.length?rows[rows.length-1].date:null;
-  if(last){var hist=all.filter(function(r){return r.date<=last});var li=null;hist.forEach(function(r){if(r.inc+r.unk>0)li=r.date});setRows('insiden').forEach(function(r){if(r.kategori!=='Near Miss'&&r.date<=last&&(!li||r.date>li))li=r.date});
+  if(last){var hist=all.filter(function(r){return r.date<=last});var li=null;hist.forEach(function(r){if(r.inc+r.unk>0)li=r.date});
     $('rHero').textContent=fmtN(li?diffDays(li,last):diffDays(hist[0].date,last)+1);$('rHeroNote').textContent=li?'Insiden terakhir '+fmtD(li)+'. Dihitung sampai laporan '+fmtD(last)+'.':'Tidak ada insiden tercatat sampai '+fmtD(last)+'.'}
   else{$('rHero').textContent='—';$('rHeroNote').textContent='Belum ada Daily Report pada periode ini.'}
-  if(last&&rows[rows.length-1].perfect!=null&&!laterInc(null,last,'all')&&!hasDailyInc(all,last)){$('rHero').textContent=fmtN(rows[rows.length-1].perfect);$('rHeroNote').textContent='Consecutive Perfect Days dari Daily Report '+fmtD(last)+'.'}
+  if(last&&rows[rows.length-1].perfect!=null){$('rHero').textContent=fmtN(rows[rows.length-1].perfect);$('rHeroNote').textContent='Dari Daily Report '+fmtD(last)+'. Hanya Fatality yang memutus hitungan.'}
+  if(last){var fr=fatalTerakhir(last);if(fr){$('rHero').textContent=fmtN(diffDays(fr,last));$('rHeroNote').textContent='Fatality terakhir '+fmtD(fr)+'. Dihitung sampai laporan '+fmtD(last)+'.'}else if(rows[rows.length-1].perfect==null){$('rHero').textContent=fmtN(diffDays(all[0].date,last)+1);$('rHeroNote').textContent='Tidak ada Fatality sejak '+fmtD(all[0].date)+'. Dihitung sampai laporan '+fmtD(last)+'.'}}
   var mt=pRows('temuan');var insOpen=ins.filter(openIns).length+mt.filter(function(r){return !r.closed}).length,fail=ins.filter(isFail).length,lay=ins.filter(function(r){return r.hasil===true}).length;
   var aktif=mp.filter(function(r){return r.aktif!==false}).length;
   var units=apd.reduce(function(a,r){return a+(r.jumlah||1)},0);
@@ -1319,7 +1332,7 @@ async function ocrGambar(images){
 }
 async function bacaLokal(file,d){
   if(!d||d.text.trim().length>=80||!d.images||!d.images.length)return false;
-  try{file.__ocr=await ocrGambar(d.images);d.text=file.__ocr;say('Gemini belum tersambung, jadi file ini dibaca langsung di browser. Tulisan tangan bisa keliru, mohon cek hasilnya.','bad');return true}catch(e){return false}
+  try{file.__ocr=await ocrGambar(d.images);d.text=file.__ocr;var nt=$('notice'),al=nt&&!nt.hidden&&/bad/.test(nt.className)?clean(nt.textContent).replace(/\s*Kolomnya diisi manual dulu\.?$/,'').replace(/,?\s*jadi kolomnya diisi manual( dulu)?\.?$/i,''):'';if(/dibaca langsung di browser/.test(al))al='';say((al?'Gemini gagal: '+al+'. ':'Gemini tidak memberi jawaban yang bisa dipakai. ')+'File ini dibaca langsung di browser, tulisan tangan bisa keliru, mohon cek hasilnya.','bad');return true}catch(e){return false}
 }
 async function pdfRead(file){
   if(!window.pdfjsLib){await loadLib('pdf');pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'}
@@ -1770,9 +1783,9 @@ function renderKpis(rows,scope){
   if(lastDate){
     var hist=scope.filter(function(r){return r.date<=lastDate}).sort(byDate);
     var lastInc=null;hist.forEach(function(r){if(r.inc+r.unk>0)lastInc=r.date});
-    setRows('insiden').forEach(function(r){if(r.kategori!=='Near Miss'&&r.date<=lastDate&&(state.loc==='all'||r.loc===state.loc)&&(!lastInc||r.date>lastInc))lastInc=r.date});
-    if(lastInc){heroN=diffDays(lastInc,lastDate);note='Insiden terakhir '+fmtD(lastInc)+'. Dihitung sampai laporan '+fmtD(lastDate)+'.'}
-    else if(rows[rows.length-1].perfect!=null){heroN=rows[rows.length-1].perfect;note='Consecutive Perfect Days dari Daily Report '+fmtD(lastDate)+'.'}
+    var fd=fatalTerakhir(lastDate,state.loc);if(fd){heroN=diffDays(fd,lastDate);note='Fatality terakhir '+fmtD(fd)+'. Dihitung sampai laporan '+fmtD(lastDate)+'.'}
+    else if(rows[rows.length-1].perfect!=null){heroN=rows[rows.length-1].perfect;note='Dari Daily Report '+fmtD(lastDate)+'. Hanya Fatality yang memutus hitungan.'}
+    else if(hist.length){heroN=diffDays(hist[0].date,lastDate)+1;note='Tidak ada Fatality sejak '+fmtD(hist[0].date)+'. Dihitung sampai laporan '+fmtD(lastDate)+'.'}
     else{heroN=diffDays(hist[0].date,lastDate)+1;note='Tidak ada insiden tercatat sejak '+fmtD(hist[0].date)+' sampai '+fmtD(lastDate)+'. Near miss tidak memutus hitungan.'}
   }
   $('heroNum').textContent=typeof heroN==='number'?fmtN(heroN):heroN;$('heroNote').textContent=note;
